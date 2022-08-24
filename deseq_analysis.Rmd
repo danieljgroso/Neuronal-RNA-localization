@@ -1,0 +1,227 @@
+---
+title: "Differential Expression Anaylsis of Neuropil/Soma-enriched Genes with Kallisto and DESeq2"
+author: "Daniel Groso"
+date: '2022-07-08'
+output:
+  html_document: default
+  pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+#install packages
+#if (!require("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+#
+#BiocManager::install("DESeq2")
+```
+
+```{r}
+# load packages
+library(DESeq2, warn.conflicts = F, quietly = T)
+```
+
+```{r}
+# load in raw counts
+# note: file cannot contain any duplicate genes. to circumvent this, sum the counts of the duplicates (recommended) or remove the duplicate genes entirely (not recommended)
+
+# note: blank lines at the end of the counts file will count as duplicates. can manually remove 
+
+countdata <- read.table("/Users/dgroso/RStudio/01-WANG-LAB/01-RNA-LOCALIZATION-PROJECT/03-DE-KALLISTO/kallisto_all_counts.txt", header=TRUE, row.names= 1)
+
+head(countdata)
+```
+
+```{r}
+# convert to matrix
+countdata <- as.matrix(countdata)
+head(countdata)
+```
+
+```{r}
+# Assign condition (first 3 are soma, last three are neuropil-- treated each sample as a replicate)
+(condition <- factor(c(rep("Soma", 3), rep("Neuropil", 3))))
+```
+
+```{r}
+# convert counts to integer and instantiate dataset
+neurodds <- DESeqDataSetFromMatrix(countData=round(countdata), 
+                                  colData=coldata, 
+                                  design=~condition)
+neurodds
+
+# Create a coldata frame and instantiate the DESeqDataSet
+#(coldata <- data.frame(row.names=colnames(countdata), condition))
+#neurodds <- DESeqDataSetFromMatrix(countData=countdata, colData=coldata, design=~condition)
+#neurodds
+```
+
+```{r}
+# Run the DESeq pipeline
+neurodds <- DESeq(neurodds)
+```
+
+```{r}
+# Plot dispersions
+#png("qc1-dispersions.png", 1000, 1000, pointsize=20)
+plotDispEsts(neurodds, main="Dispersion plot")
+```
+
+```{r}
+# Regularized log transformation for clustering/heatmaps
+rld <- rlogTransformation(neurodds)
+head(assay(rld))
+hist(assay(rld))
+```
+
+```{r}
+library(RColorBrewer)
+(mycols <- brewer.pal(8, "Dark2")[1:length(unique(condition))])
+```
+
+```{r}
+#install.packages("gplots")
+# Sample distance heatmap
+sampleDists <- as.matrix(dist(t(assay(rld))))
+library(gplots)
+#png("qc-heatmap-samples.png", w=1000, h=1000, pointsize=20)
+heatmap.2(as.matrix(sampleDists), key=F, trace="none",
+col=colorpanel(100, "black", "white"),
+ColSideColors=mycols[condition], RowSideColors=mycols[condition],
+margin=c(10, 10), main="Sample Distance Matrix")
+```
+
+```{r}
+#install.packages('calibrate')
+rld_pca <- function (rld, intgroup = "condition", ntop = 500, colors=NULL, legendpos="bottomleft", main="PCA Biplot", textcx=1, ...) {
+require(genefilter)
+require(calibrate)
+require(RColorBrewer)
+rv = rowVars(assay(rld))
+select = order(rv, decreasing = TRUE)[seq_len(min(ntop, length(rv)))]
+pca = prcomp(t(assay(rld)[select, ]))
+fac = factor(apply(as.data.frame(colData(rld)[, intgroup, drop = FALSE]), 1, paste, collapse = " : "))
+if (is.null(colors)) {
+if (nlevels(fac) >= 3) {
+colors = brewer.pal(nlevels(fac), "Paired")
+} else {
+colors = c("black", "red")
+}
+}
+pc1var <- round(summary(pca)$importance[2,1]*100, digits=1)
+pc2var <- round(summary(pca)$importance[2,2]*100, digits=1)
+pc1lab <- paste0("PC1 (",as.character(pc1var),"%)")
+pc2lab <- paste0("PC2 (",as.character(pc2var),"%)")
+plot(PC2~PC1, data=as.data.frame(pca$x), bg=colors[fac], pch=21, xlab=pc1lab, ylab=pc2lab, main=main, ...)
+with(as.data.frame(pca$x), textxy(PC1, PC2, labs=rownames(as.data.frame(pca$x)), cex=textcx))
+legend(legendpos, legend=levels(fac), col=colors, pch=20)
+# rldyplot(PC2 ~ PC1, groups = fac, data = as.data.frame(pca$rld),
+# pch = 16, cerld = 2, aspect = "iso", col = colours, main = draw.key(key = list(rect = list(col = colours),
+# terldt = list(levels(fac)), rep = FALSE)))
+}
+#png("qc-pca.png", 1000, 1000, pointsize=20)
+rld_pca(rld, colors=mycols, intgroup="condition", xlim=c(-75, 35))
+```
+
+```{r}
+# Get differential expression results
+res <- results(neurodds)
+table(res$padj<0.05)
+## Order by adjusted p-value
+res <- res[order(res$padj), ]
+## Merge with normalized count data
+resdata <- merge(as.data.frame(res), as.data.frame(counts(neurodds, normalized=TRUE)), by="row.names", sort=FALSE)
+names(resdata)[1] <- "Gene"
+head(resdata)
+## Write results
+write.csv(resdata, file="diffexpr-results.csv")
+```
+
+```{r}
+## Examine plot of p-values
+hist(res$pvalue, breaks=50, col="grey")
+```
+
+```{r}
+## MA plots
+ DESeq2::plotMA(neurodds, ylim=c(-1,1))
+# 
+# maplot <- function (res, thresh=0.05, labelsig=TRUE, textcx=1, ...) {
+# with(res, plot(baseMean, log2FoldChange, pch=20, cex=.5, log="x", ...))
+# with(subset(res, padj<thresh), points(baseMean, log2FoldChange, col="red", pch=20, cex=1.5))
+# if (labelsig) {
+# require(calibrate)
+# with(subset(res, padj<thresh), textxy(baseMean, log2FoldChange, labs=Gene, cex=textcx, col=2))
+# }
+# }
+#png("diffexpr2-maplot.png", 1500, 1000, pointsize=20)
+#maplot(resdata, main="MA Plot")
+```
+
+```{r}
+## Volcano plot, signficant genes labeled
+volcanoplot <- function (res, lfcthresh=2, sigthresh=0.05, main="Volcano Plot", legendpos="bottomright", labelsig=TRUE, textcx=1, ...) {
+with(res, plot(log2FoldChange, -log10(pvalue), pch=20, main=main, ...))
+with(subset(res, padj<sigthresh ), points(log2FoldChange, -log10(pvalue), pch=20, col="red", ...))
+with(subset(res, abs(log2FoldChange)>lfcthresh), points(log2FoldChange, -log10(pvalue), pch=20, col="orange", ...))
+with(subset(res, padj<sigthresh & abs(log2FoldChange)>lfcthresh), points(log2FoldChange, -log10(pvalue), pch=20, col="green", ...))
+if (labelsig) {
+require(calibrate)
+with(subset(res, padj<sigthresh & abs(log2FoldChange)>lfcthresh), textxy(log2FoldChange, -log10(pvalue), labs=Gene, cex=textcx, ...))
+}
+legend(legendpos, xjust=1, yjust=1, legend=c(paste("FDR<",sigthresh,sep=""), paste("|LogFC|>",lfcthresh,sep=""), "both"), pch=20, col=c("red","orange","green"))
+}
+#png("diffexpr-volcanoplot.png", 1200, 1000, pointsize=20)
+volcanoplot(resdata, lfcthresh=2, sigthresh=0.05, textcx=.8, xlim=c(-5, 5))
+```
+
+```{r}
+#pairs(log(countdata))
+new_cd <- countdata + 1
+
+logcounts <- log(new_cd)
+cor(logcounts)
+```
+
+```{python}
+# append DESeq2 output tsv with biomart gene names
+
+new_dict = {}
+
+with open('/Users/dgroso/RStudio/01-WANG-LAB/01-RNA-LOCALIZATION-PROJECT/01-DE/mart_export_for_deseq.txt', 'r') as biomart: #path to biomart outfile
+    for line in biomart: 
+        k = line.split()
+        try:
+            new_dict[k[1]] = k[4] #key = stable ENS ID, value = gene name
+        except KeyError:
+            new_dict[k[1]] = '' #raise exception if the ENS ID is not in the file
+biomart.close()
+```
+
+```{python}
+# get gene names
+# first, convert deseq csv to tsv / text file with a webtool or other script
+with open('/Users/dgroso/RStudio/01-WANG-LAB/01-RNA-LOCALIZATION-PROJECT/01-DE/deseq_out_as_tabs.txt', 'a+') as deseqout: 
+    with open('/Users/dgroso/RStudio/01-WANG-LAB/01-RNA-LOCALIZATION-PROJECT/03-DE-KALLISTO/deseq_parsed.tsv', 'w') as newout: # writing to new file. will need to edit with bash commands or manually after
+        deseqout.seek(0)
+        for line in deseqout:
+            vals1 = line.split()
+            try:           
+                genename = new_dict[vals1[1]]
+                data = line[:-1] + '\t' + genename
+                newout.write(data + '\n')
+            except KeyError:
+              pass
+deseqout.close()
+# parsed file will not have column headers. will now add in using bash commands
+```
+
+```{bash}
+# adds to the first row of the file, to serve as your column headers. will need manual correction downstream to analyze in excel. cannot run on MacOS without explicitly declaring the extension
+
+#sed -i $'1 i\\ \tEns_ID\tbaseMean\tlog2FoldChange\tlfcSE\tstat\tpvalue\tpadj\tsoma_1\tsoma_2\tsoma_3\tneuropil_1\tneuropil_2\tneuropil_3\tgene_name' deseq_parsed.tsv
+```
