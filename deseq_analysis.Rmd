@@ -1,6 +1,5 @@
 ---
 title: "Differential Expression Anaylsis of Neuropil/Soma-enriched Genes with Kallisto and DESeq2"
-author: "Daniel Groso"
 date: '2022-07-08'
 output:
   html_document: default
@@ -14,10 +13,9 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 
 ```{r}
 #install packages
-#if (!require("BiocManager", quietly = TRUE))
-#   install.packages("BiocManager")
-#
-#BiocManager::install("DESeq2")
+if (!require("BiocManager", quietly = TRUE))
+   install.packages("BiocManager")
+BiocManager::install("DESeq2")
 ```
 
 ```{r}
